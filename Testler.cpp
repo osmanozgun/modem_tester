@@ -271,9 +271,6 @@ void TabTestBaslat::durdurTest() {
 }
 
 void TabTestBaslat::seriVeriOku() {
-    QString seri_no = seriNoEdit->text().trimmed();
-    
-
     // Yeni veri geldiğinde buffer'a ekle
     readBuffer.append(port->readAll());
 
@@ -287,38 +284,40 @@ void TabTestBaslat::seriVeriOku() {
         logEdit->appendPlainText(">> " + text);
         logLines.append(text);
 
-        
+        // Seri numarası yakala
         if (text.contains("Link-layer address:", Qt::CaseInsensitive)) {
-        QString serialfound = text.right(9); 
-        QString cleanedSerial = serialfound.remove(".");
+            QString serialfound = text.right(9); 
+            QString cleanedSerial = serialfound.remove(".");
+            seriNoEdit->setText(cleanedSerial);
 
-        seriNoEdit->setText(cleanedSerial);
-
-        // Seri numarası gelince veritabanına INSERT yap
-        QSqlQuery insert;
-        insert.prepare("INSERT INTO modem_testleri (seri_no, eeprom, rf, network, result, aciklama) "
-                       "VALUES (:seri_no, 0, 0, 0, :result, '') "
-                       "ON CONFLICT(seri_no) DO UPDATE SET "
-                       "eeprom = 0, rf = 0, network = 0, result = :result2, aciklama = ''");
-        insert.bindValue(":seri_no", cleanedSerial);
-        insert.bindValue(":result", "FAIL");
-        insert.bindValue(":result2", "FAIL");
-        insert.exec();
+            // Seri numarası gelince veritabanına INSERT yap
+            QSqlQuery insert;
+            insert.prepare("INSERT INTO modem_testleri (seri_no, eeprom, rf, network, result) "
+                           "VALUES (:seri_no, 0, 0, 0, :result) "
+                           "ON CONFLICT(seri_no) DO UPDATE SET "
+                           "eeprom = 0, rf = 0, network = 0, result = :result2");
+            insert.bindValue(":seri_no", cleanedSerial);
+            insert.bindValue(":result", "FAIL");
+            insert.bindValue(":result2", "FAIL");
+            insert.exec();
         }
-        QSqlQuery update;  
+
+        // EEPROM test kontrolü
         if (text.contains("Flash open success", Qt::CaseInsensitive)) {
             eeprom_ok = true;
-            update.prepare("UPDATE modem_testleri SET eeprom = 1 WHERE seri_no = :seri_no");
         } else if (text.contains("Flash open fail", Qt::CaseInsensitive)) {
             eeprom_ok = false;
-            update.prepare("UPDATE modem_testleri SET eeprom = 0 WHERE seri_no = :seri_no");
         }
-
-        if (!update.lastQuery().isEmpty()) {
+        {
+            QString seri_no = seriNoEdit->text().trimmed();
+            QSqlQuery update;
+            update.prepare("UPDATE modem_testleri SET eeprom = :val WHERE seri_no = :seri_no");
+            update.bindValue(":val", eeprom_ok ? 1 : 0);
             update.bindValue(":seri_no", seri_no);
             update.exec();
         }
 
+        // Network RSSI kontrolü
         if (text.contains("rssip", Qt::CaseInsensitive)) {
             QRegularExpression re("rssip\\s*(-?\\d+)");
             QRegularExpressionMatch match = re.match(text);
@@ -329,18 +328,26 @@ void TabTestBaslat::seriVeriOku() {
                 int minRssi = minRssiCombo->currentText().toInt();
                 int maxRssi = maxRssiCombo->currentText().toInt();
 
-                if (rssi >= maxRssi && rssi <= minRssi) {
+                if (rssi <= minRssi && rssi >= maxRssi) {
                     network_ok = true;
-                    QSqlQuery q;
-                    q.prepare("UPDATE modem_testleri SET network = 1 WHERE seri_no = :seri_no");
-                    q.bindValue(":seri_no", seri_no);
-                    q.exec();
+                } else {
+                    network_ok = false;
                 }
+
+                QString seri_no = seriNoEdit->text().trimmed();
+                QSqlQuery q;
+                q.prepare("UPDATE modem_testleri SET network = :net WHERE seri_no = :seri_no");
+                q.bindValue(":net", network_ok ? 1 : 0);
+                q.bindValue(":seri_no", seri_no);
+                q.exec();
             }
         }
 
+        // Görünümü ve RF durumunu güncelle
         guncelleGorunum();
 
+        // Genel sonuç PASS/FAIL
+        QString seri_no = seriNoEdit->text().trimmed();
         QSqlQuery q;
         q.prepare("UPDATE modem_testleri SET result = :res WHERE seri_no = :seri_no");
         q.bindValue(":res", (eeprom_ok && rf_ok && network_ok) ? "PASS" : "FAIL");
@@ -372,15 +379,15 @@ void TabTestBaslat::guncelleGorunum() {
     genelSonucLabel->setStyleSheet(pass
         ? "QLabel { color: green; font-weight: bold; }"
         : "QLabel { color: red; font-weight: bold; }");
-    
-    if (rf_ok) {
-        QString seri_no = seriNoEdit->text().trimmed();
-        QSqlQuery q;
-        q.prepare("UPDATE modem_testleri SET rf = 1 WHERE seri_no = :seri_no");
-        q.bindValue(":seri_no", seri_no);
-        q.exec();
-    }
-    
+
+    // RF sonucunu her zaman güncelle
+    QString seri_no = seriNoEdit->text().trimmed();
+    QSqlQuery q;
+    q.prepare("UPDATE modem_testleri SET rf = :rf WHERE seri_no = :seri_no");
+    q.bindValue(":rf", rf_ok ? 1 : 0);
+    q.bindValue(":seri_no", seri_no);
+    q.exec();
+
     baslatBlink();
 }
 
